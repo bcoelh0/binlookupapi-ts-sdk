@@ -89,17 +89,24 @@ export interface SDKConfig {
   baseUrl?: string;
   /** Maximum number of retries for 5xx errors or network failures */
   maxRetries?: number;
+  /**
+   * Request timeout in milliseconds. Defaults to 10,000ms (10 seconds).
+   * Without a timeout, a slow or unresponsive server would stall the caller indefinitely.
+   */
+  timeout?: number;
 }
 
 export class BINLookupClient {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly maxRetries: number;
+  private readonly timeout: number;
 
   constructor(config: SDKConfig) {
     this.apiKey = config.apiKey;
     this.baseUrl = config.baseUrl?.replace(/\/$/, '') || 'https://api.binlookupapi.com';
     this.maxRetries = config.maxRetries ?? 5;
+    this.timeout = config.timeout ?? 10_000;
   }
 
   /**
@@ -127,6 +134,10 @@ export class BINLookupClient {
     body: BINLookupRequest,
     attempt: number = 0
   ): Promise<BINLookupResponse> {
+    // AbortController allows us to cancel the fetch if it exceeds the configured timeout.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+
     try {
       const response = await fetch(`${this.baseUrl}/v1/bin`, {
         method: 'POST',
@@ -135,7 +146,10 @@ export class BINLookupClient {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
+        signal: controller.signal,
       });
+
+      clearTimeout(timer);
 
       // Handle Success
       if (response.ok) {
@@ -151,7 +165,15 @@ export class BINLookupClient {
       }
 
       // Handle Errors
-      const errorJson: BINErrorResponse = await response.json();
+      // Guard against non-JSON error bodies (e.g. HTML gateway errors from a reverse proxy).
+      // Without this, a malformed error response would throw an untyped parse error that
+      // bypasses retry logic and surfaces as a confusing crash.
+      let errorJson: BINErrorResponse;
+      try {
+        errorJson = await response.json();
+      } catch {
+        errorJson = { error: 'SERVICE_ERROR', message: `HTTP ${response.status}` };
+      }
 
       // Retry logic for 5xx errors (Service Errors)
       if (response.status >= 500 && attempt < this.maxRetries) {
@@ -164,7 +186,8 @@ export class BINLookupClient {
         response.status
       );
     } catch (error) {
-      // Retry logic for network/fetch errors
+      clearTimeout(timer);
+      // Retry logic for network/fetch errors (including AbortError from timeout)
       if (!(error instanceof BINLookupAPIError) && attempt < this.maxRetries) {
         return this.retry(body, attempt);
       }
@@ -173,7 +196,10 @@ export class BINLookupClient {
   }
 
   private async retry(body: BINLookupRequest, attempt: number): Promise<BINLookupResponse> {
-    const delay = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s, 8s, 16s
+    // Jitter (±20%) prevents multiple concurrent clients from thundering-herd retrying
+    // at identical intervals after a shared outage.
+    const base = Math.pow(2, attempt) * 1000; // 1s, 2s, 4s, 8s, 16s
+    const delay = base * (1 + Math.random() * 0.2);
     await new Promise((resolve) => setTimeout(resolve, delay));
     return this.requestWithRetry(body, attempt + 1);
   }
