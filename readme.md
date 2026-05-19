@@ -37,6 +37,9 @@ yarn add @binlookupapi/binlookupapi-ts-sdk
 
 ## Quick Start
 
+1. Sign up and get your free API Key here: https://app.binlookupapi.com/
+
+2.
 ```ts
 import { BINLookupClient, BINLookupAPIError } from '@binlookupapi/binlookupapi-ts-sdk';
 
