@@ -1,5 +1,5 @@
 {
-  "name": "binlookupapi-sdk",
+  "name": "@binlookupapi/binlookupapi-ts-sdk",
   "version": "1.0.0",
   "description": "Official TypeScript SDK for BINLookupAPI",
   "main": "dist/index.js",
